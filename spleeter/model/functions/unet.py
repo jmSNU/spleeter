@@ -188,7 +188,7 @@ def apply_unet(
         output = Multiply(name=output_name)([up7, input_tensor])
         return output
     return Conv2D(
-        2,
+        3, #2,
         (4, 4),
         dilation_rate=(2, 2),
         padding="same",
