@@ -175,6 +175,7 @@ def apply_unet(
     up6 = conv2d_transpose_factory(1, (5, 5), strides=(2, 2))((merge5))
     up6 = deconv_activation_layer(up6)
     batch12 = BatchNormalization(axis=-1)(up6)
+    print(batch12.shape)
     # Last layer to ensure initial shape reconstruction.
     if not output_mask_logit:
         up7 = Conv2D(
