@@ -167,12 +167,14 @@ class EstimatorSpecBuilder(object):
             ValueError:
                 If required model_type is not supported.
         """
+
         input_tensor = self.spectrogram_feature
         model = self._params.get("model", None)
         if model is not None:
             model_type = model.get("type", self.DEFAULT_MODEL)
         else:
             model_type = self.DEFAULT_MODEL
+            print("!!!!DEFAULT MODEL IS LOADED!!!!")
         try:
             apply_model = get_model_function(model_type)
         except ModuleNotFoundError:
