@@ -114,6 +114,7 @@ class Separator(object):
                 (Optional) Enable multi-processing.
         """
         self._params = load_configuration(params_descriptor)
+        print(self._params)
         self._sample_rate = self._params["sample_rate"]
         self._MWF = MWF
         self._tf_graph = tf.Graph()
