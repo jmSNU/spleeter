@@ -17,6 +17,9 @@ from glob import glob
 from itertools import product
 from os.path import join
 from typing import Dict, List, Optional, Tuple
+import os
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1' 
 
 # pyright: reportMissingImports=false
 # pylint: disable=import-error
@@ -43,18 +46,51 @@ from .options import (
 )
 from .utils.logging import configure_logger, logger
 
+
+import tensorflow as tf  # type: ignore
+from tensorflow.compat.v1.logging import INFO  # type: ignore
+
+from .audio.adapter import AudioAdapter
+from .dataset import get_training_dataset, get_validation_dataset
+from .model import model_fn
+from .model.provider import ModelProvider
+from .utils.configuration import load_configuration
+
+from tqdm import tqdm  # Import tqdm for progress bar
+
 # pylint: enable=import-error
 
 spleeter: Typer = Typer(add_completion=False, no_args_is_help=True, short_help="-h")
 """ CLI application. """
-
 
 @spleeter.callback()
 def default(
     version: bool = VersionOption,
 ) -> None:
     pass
+class TQDMProgressHook(tf.estimator.SessionRunHook):
+    def __init__(self, total_steps):
+        self.total_steps = total_steps
+        self.progress_bar = None
+        self.last_step = 0
 
+    def begin(self):
+        self.progress_bar = tqdm(total=self.total_steps, desc='Training Progress')
+
+    def before_run(self, run_context):
+        # Request the global step to track progress
+        return tf.estimator.SessionRunArgs(
+            fetches=tf.compat.v1.train.get_global_step()
+        )
+
+    def after_run(self, run_context, run_values):
+        global_step = run_values.results
+        steps_this_iter = global_step - self.last_step
+        self.last_step = global_step
+        self.progress_bar.update(steps_this_iter)
+
+    def end(self, session):
+        self.progress_bar.close()
 
 @spleeter.command(no_args_is_help=True)
 def train(
@@ -64,21 +100,17 @@ def train(
     verbose: bool = VerboseOption,
 ) -> None:
     """
-    Train a source separation model
+    Train a source separation model with tqdm progress bar.
     """
     import tensorflow as tf  # type: ignore
-
-    from .audio.adapter import AudioAdapter
-    from .dataset import get_training_dataset, get_validation_dataset
-    from .model import model_fn
-    from .model.provider import ModelProvider
-    from .utils.configuration import load_configuration
+    tf.compat.v1.logging.set_verbosity(INFO)
 
     configure_logger(verbose)
     audio_adapter = AudioAdapter.get(adapter)
     params = load_configuration(params_filename)
     session_config = tf.compat.v1.ConfigProto()
     session_config.gpu_options.per_process_gpu_memory_fraction = 0.45
+
     estimator = tf.estimator.Estimator(
         model_fn=model_fn,
         model_dir=params["model_dir"],
@@ -92,19 +124,29 @@ def train(
             keep_checkpoint_max=2,
         ),
     )
+
     input_fn = partial(get_training_dataset, params, audio_adapter, data)
+
+    # Create the TQDMProgressHook with total steps from params
+    progress_hook = TQDMProgressHook(total_steps=params["train_max_steps"])
+
     train_spec = tf.estimator.TrainSpec(
-        input_fn=input_fn, max_steps=params["train_max_steps"]
+        input_fn=input_fn,
+        max_steps=params["train_max_steps"],
+        hooks=[progress_hook]  # Add the progress hook here
     )
-    input_fn = partial(get_validation_dataset, params, audio_adapter, data)
+
+    input_fn_eval = partial(get_validation_dataset, params, audio_adapter, data)
     evaluation_spec = tf.estimator.EvalSpec(
-        input_fn=input_fn, steps=None, throttle_secs=params["throttle_secs"]
+        input_fn=input_fn_eval,
+        steps=None,
+        throttle_secs=params["throttle_secs"]
     )
+
     logger.info("Start model training")
     tf.estimator.train_and_evaluate(estimator, train_spec, evaluation_spec)
     ModelProvider.writeProbe(params["model_dir"])
     logger.info("Model training done")
-
 
 @spleeter.command(no_args_is_help=True)
 def separate(
@@ -150,7 +192,6 @@ def separate(
             synchronous=False,
         )
     separator.join()
-
 
 EVALUATION_SPLIT: str = "test"
 EVALUATION_METRICS_DIRECTORY: str = "metrics"
