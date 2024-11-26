@@ -157,6 +157,29 @@ class EstimatorSpecBuilder(object):
         self._frame_length = params["frame_length"]
         self._frame_step = params["frame_step"]
 
+        self._prompts = """
+            This track represents ordinary media content situation that includes the dialogue with background musics.
+            You should separate this into dialogue, lyrics, background musics, and noise.
+        """
+        model = self._params.get("model", None)
+        self._model_type = model.get("type", self.DEFAULT_MODEL)
+        if self._model_type =="unet_text.unet":
+            from transformers import TFDistilBertModel, AutoTokenizer
+            tokenizer = AutoTokenizer.from_pretrained("distilbert-base-uncased")
+            text_input = tokenizer(
+                self._prompts,
+                padding="max_length",  # Pad to the max sequence length
+                truncation=True,  # Truncate to fit the model's max input size
+                max_length=32,  # Set max input length (adjust as needed)
+                return_tensors="tf",  # Return as TensorFlow tensors
+            )
+            # # Pretrained Text Encoder
+            bert_encoder = TFDistilBertModel.from_pretrained("distilbert-base-uncased")
+            bert_encoder.trainable = False
+            text_embeddings = bert_encoder(text_input, output_hidden_states=False)[0]  # Shape: (1, seq_length, 768)
+            self._text_embeddings = tf.keras.layers.Dense(512, activation="relu")(text_embeddings)  # Shape: (1, seq_length, 512)
+
+
     def _build_model_outputs(self):
         """
         Created a batch_sizexTxFxn_channels input tensor containing
@@ -167,7 +190,6 @@ class EstimatorSpecBuilder(object):
             ValueError:
                 If required model_type is not supported.
         """
-
         input_tensor = self.spectrogram_feature
         model = self._params.get("model", None)
         if model is not None:
@@ -179,9 +201,15 @@ class EstimatorSpecBuilder(object):
             apply_model = get_model_function(model_type)
         except ModuleNotFoundError:
             raise ValueError(f"No model function {model_type} found")
-        self._model_outputs = apply_model(
-            input_tensor, self._instruments, self._params["model"]["params"]
-        )
+        
+        if self._model_type != "unet_text.unet":
+            self._model_outputs = apply_model(
+                input_tensor, self._instruments, self._params["model"]["params"]
+            )
+        else:
+            self._model_outputs = apply_model(
+                input_tensor, self._instruments, self._text_embeddings, self._params["model"]["params"]
+            )
 
     def _build_loss(self, labels: Dict) -> Tuple[tf.Tensor, Dict]:
         """
